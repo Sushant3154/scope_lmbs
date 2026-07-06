@@ -1,0 +1,25 @@
+name: ait_calibration_app
+description: "A 360-degree calibration application for Android and tablets."
+version: 1.0.0+1
+
+publish_to: 'none'
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.6
+  # media_kit — libmpv-based player, actively maintained, RTSP/RTMP/HLS
+  media_kit: ^1.1.11
+  media_kit_video: ^1.2.4
+  media_kit_libs_android_video: ^1.3.2   # native android libs (VLC/FFmpeg)
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true

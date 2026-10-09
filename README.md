@@ -1,17 +1,33 @@
-# qt_calibration_app
+# scope_lmbs
 
-A new Flutter project.
+SCOPE_LMBS_FINAL
 
-## Getting Started
+Laser Marking / Beam Scope calibration project, containing:
 
-This project is a starting point for a Flutter application.
+- `android_app/` — Flutter Android application (calibration canvas, main app)
+- `main.py`, `simulator.py`, `video_pipeline.py`, `calibration.py` — Python desktop pipeline
+- `AIT_LMBS.apk` — prebuilt Android release
+- `User_Manual.pdf` — user documentation
 
-A few resources to get you started if this is your first Flutter project:
+## Python side
+
+```bash
+pip install -r requirements.txt
+python main.py
+```
+
+A Windows executable can be built with `build_exe.bat`.
+
+## Flutter side
+
+```bash
+cd android_app
+flutter pub get
+flutter run
+```
+
+A few resources if this is your first Flutter project:
 
 - [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
 - [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
 - [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.

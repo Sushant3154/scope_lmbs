@@ -538,7 +538,7 @@ class MainWindow(QMainWindow):
         self.grp_rtsp = QGroupBox("RTSP CONNECTION")
         rtsp_layout = QVBoxLayout(self.grp_rtsp)
         
-        self.txt_rtsp_url = QLineEdit("rtsp://192.168.1.141:1945/")
+        self.txt_rtsp_url = QLineEdit("rtsp://192.168.3.1/livestream")
         self.btn_connect = QPushButton("Connect Stream")
         self.btn_connect.clicked.connect(self.toggle_stream)
         
@@ -547,7 +547,29 @@ class MainWindow(QMainWindow):
         rtsp_layout.addWidget(self.btn_connect)
         sidebar_layout.addWidget(self.grp_rtsp)
         self.grp_rtsp.setEnabled(False)  # Simulator default
-        
+
+        # Group 2.5: Control Actions
+        grp_actions = QGroupBox("ACTIONS")
+        actions_layout = QVBoxLayout(grp_actions)
+
+        self.btn_take_reading = QPushButton("Take Reading")
+        self.btn_take_reading.setObjectName("btn_take_reading")
+        self.btn_take_reading.clicked.connect(self.take_reading)
+
+        self.btn_calculate = QPushButton("Calculate Center")
+        self.btn_calculate.setObjectName("btn_calculate")
+        self.btn_calculate.setEnabled(False)
+        self.btn_calculate.clicked.connect(self.calculate_center)
+
+        self.btn_clear = QPushButton("Clear All Readings")
+        self.btn_clear.setObjectName("btn_clear")
+        self.btn_clear.clicked.connect(self.clear_readings)
+
+        actions_layout.addWidget(self.btn_take_reading)
+        actions_layout.addWidget(self.btn_calculate)
+        actions_layout.addWidget(self.btn_clear)
+        sidebar_layout.addWidget(grp_actions)
+
         # Group 3: Angle Controller (0 - 360)
         grp_angle = QGroupBox("CAMERA ROTATION (360° YAW)")
         angle_layout = QVBoxLayout(grp_angle)
@@ -596,29 +618,7 @@ class MainWindow(QMainWindow):
         readings_layout.addWidget(self.lbl_readings)
         readings_layout.addWidget(self.lst_readings)
         sidebar_layout.addWidget(grp_readings)
-        
-        # Group 5: Control Actions
-        grp_actions = QGroupBox("ACTIONS")
-        actions_layout = QVBoxLayout(grp_actions)
-        
-        self.btn_take_reading = QPushButton("Take Reading")
-        self.btn_take_reading.setObjectName("btn_take_reading")
-        self.btn_take_reading.clicked.connect(self.take_reading)
-        
-        self.btn_calculate = QPushButton("Calculate Center")
-        self.btn_calculate.setObjectName("btn_calculate")
-        self.btn_calculate.setEnabled(False)
-        self.btn_calculate.clicked.connect(self.calculate_center)
-        
-        self.btn_clear = QPushButton("Clear All Readings")
-        self.btn_clear.setObjectName("btn_clear")
-        self.btn_clear.clicked.connect(self.clear_readings)
-        
-        actions_layout.addWidget(self.btn_take_reading)
-        actions_layout.addWidget(self.btn_calculate)
-        actions_layout.addWidget(self.btn_clear)
-        sidebar_layout.addWidget(grp_actions)
-        
+
         # Add Stretch at bottom
         sidebar_layout.addStretch()
         

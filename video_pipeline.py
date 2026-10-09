@@ -9,7 +9,7 @@ class VideoPipelineThread(QThread):
     status_changed = Signal(str)  # "connecting", "connected", "disconnected", "error"
     metrics_updated = Signal(float, int)  # fps, frame_count
 
-    def __init__(self, rtsp_url="rtsp://192.168.1.141:1945/"):
+    def __init__(self, rtsp_url="rtsp://192.168.3.1/livestream"):
         super().__init__()
         self.rtsp_url = rtsp_url
         self.running = False

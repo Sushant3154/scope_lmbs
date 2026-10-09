@@ -2,28 +2,52 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'calibration_system.dart';
-import 'rotating_floor_simulator.dart';
+
+/// Lets external widgets (e.g. a sidebar joystick) drive the crosshair
+/// inside a [CalibrationCanvas] imperatively, without lifting its position
+/// state up into the parent. Attach one instance per canvas.
+class CrosshairController {
+  void Function(double dx, double dy)? _onNudge;
+  VoidCallback? _onResetToCenter;
+
+  void _attach(void Function(double dx, double dy) onNudge,
+      VoidCallback onResetToCenter) {
+    _onNudge = onNudge;
+    _onResetToCenter = onResetToCenter;
+  }
+
+  void _detach() {
+    _onNudge = null;
+    _onResetToCenter = null;
+  }
+
+  /// Moves the crosshair by (dx, dy) screen pixels.
+  void nudge(double dx, double dy) => _onNudge?.call(dx, dy);
+
+  /// Snaps the crosshair back to the center of the canvas.
+  void resetToCenter() => _onResetToCenter?.call();
+}
 
 class CalibrationCanvas extends StatefulWidget {
-  final bool isSimulator;
   final double angle;
   final CalibrationSystem calibrationSystem;
-  final RotatingFloorSimulator simulator;
 
   /// media_kit VideoController — null when not connected
   final VideoController? videoController;
   final Function(double) onAngleChanged;
-  final Function(double, double, double, double) onCrosshairChanged;
+  // screenX, screenY, worldX, worldY, canvasWidth, canvasHeight
+  final Function(double, double, double, double, double, double)
+      onCrosshairChanged;
+  final CrosshairController? controller;
 
   const CalibrationCanvas({
     super.key,
-    required this.isSimulator,
     required this.angle,
     required this.calibrationSystem,
-    required this.simulator,
     required this.videoController,
     required this.onAngleChanged,
     required this.onCrosshairChanged,
+    this.controller,
   });
 
   @override
@@ -40,8 +64,53 @@ class _CalibrationCanvasState extends State<CalibrationCanvas> {
   bool _draggingRotation = false;
   double _dragStartLocalX = 0.0;
 
+  // Tracks the last canvas size we reported up to the parent, so it can be
+  // re-reported (with a fresh world-coordinate) on first layout and on any
+  // later resize/orientation change — not just when the crosshair is dragged.
+  double? _lastReportedW;
+  double? _lastReportedH;
+
   // Drag hit threshold (larger for touch screens to make it easy)
   final double _hitBoxThreshold = 35.0;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.controller?._attach(_nudgeCrosshair, _resetCrosshairToCenter);
+  }
+
+  @override
+  void didUpdateWidget(covariant CalibrationCanvas oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller?._detach();
+      widget.controller?._attach(_nudgeCrosshair, _resetCrosshairToCenter);
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.controller?._detach();
+    super.dispose();
+  }
+
+  void _nudgeCrosshair(double dx, double dy) {
+    // Locked once a centroid has been resolved, matching the draggable
+    // reticle being hidden at that point.
+    if (widget.calibrationSystem.centroid != null) return;
+    final w = _lastReportedW;
+    final h = _lastReportedH;
+    if (w == null || h == null || _cx == null || _cy == null) return;
+    _updateCrosshairPosition(_cx! + dx, _cy! + dy, w, h);
+  }
+
+  void _resetCrosshairToCenter() {
+    if (widget.calibrationSystem.centroid != null) return;
+    final w = _lastReportedW;
+    final h = _lastReportedH;
+    if (w == null || h == null) return;
+    _updateCrosshairPosition(w / 2.0, h / 2.0, w, h);
+  }
 
   void _updateCrosshairPosition(
       double screenX, double screenY, double W, double H) {
@@ -54,11 +123,7 @@ class _CalibrationCanvasState extends State<CalibrationCanvas> {
 
     final worldPt =
         widget.calibrationSystem.screenToWorld(_cx!, _cy!, widget.angle, W, H);
-    widget.onCrosshairChanged(_cx!, _cy!, worldPt.dx, worldPt.dy);
-  }
-
-  void _resetCrosshair(double W, double H) {
-    _updateCrosshairPosition(W / 2.0, H / 2.0, W, H);
+    widget.onCrosshairChanged(_cx!, _cy!, worldPt.dx, worldPt.dy, W, H);
   }
 
   @override
@@ -78,25 +143,49 @@ class _CalibrationCanvasState extends State<CalibrationCanvas> {
         final currentCx = _ratioX * W;
         final currentCy = _ratioY * H;
 
-        return GestureDetector(
-          onPanStart: (details) {
-            final touchPt = details.localPosition;
-            final distance = math.sqrt(math.pow(touchPt.dx - currentCx, 2) +
-                math.pow(touchPt.dy - currentCy, 2));
+        // Report position/canvas-size on first layout and on any later
+        // resize (rotation, tablet size change) — not just when the user
+        // drags the crosshair — so "Take Reading" never uses a stale or
+        // default screen position.
+        if (_lastReportedW != W || _lastReportedH != H) {
+          _lastReportedW = W;
+          _lastReportedH = H;
+          final reportCx = currentCx;
+          final reportCy = currentCy;
+          final reportAngle = widget.angle;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            final worldPt = widget.calibrationSystem
+                .screenToWorld(reportCx, reportCy, reportAngle, W, H);
+            widget.onCrosshairChanged(
+                reportCx, reportCy, worldPt.dx, worldPt.dy, W, H);
+          });
+        }
 
-            if (distance < _hitBoxThreshold) {
-              setState(() {
-                _draggingCrosshair = true;
-                _draggingRotation = false;
-              });
-            } else {
-              setState(() {
-                _draggingCrosshair = false;
-                _draggingRotation = true;
-                _dragStartLocalX = touchPt.dx;
-              });
-            }
-          },
+        final bool locked = widget.calibrationSystem.centroid != null;
+
+        return GestureDetector(
+          onPanStart: locked
+              ? null
+              : (details) {
+                  final touchPt = details.localPosition;
+                  final distance = math.sqrt(
+                      math.pow(touchPt.dx - currentCx, 2) +
+                          math.pow(touchPt.dy - currentCy, 2));
+
+                  if (distance < _hitBoxThreshold) {
+                    setState(() {
+                      _draggingCrosshair = true;
+                      _draggingRotation = false;
+                    });
+                  } else {
+                    setState(() {
+                      _draggingCrosshair = false;
+                      _draggingRotation = true;
+                      _dragStartLocalX = touchPt.dx;
+                    });
+                  }
+                },
           onPanUpdate: (details) {
             if (_draggingCrosshair) {
               _updateCrosshairPosition(
@@ -106,18 +195,17 @@ class _CalibrationCanvasState extends State<CalibrationCanvas> {
               final double deltaX = currentX - _dragStartLocalX;
               _dragStartLocalX = currentX;
 
-              // Rotate viewport relative to touch movement
-              double newAngle = (widget.angle - deltaX * 0.5) % 360.0;
-              if (newAngle < 0) {
-                newAngle += 360.0;
-              }
+              // Rotate viewport relative to touch movement, wrapped to the
+              // -180..180 range instead of 0..360.
+              final double newAngle =
+                  ((widget.angle - deltaX * 0.5 + 180.0) % 360.0) - 180.0;
               widget.onAngleChanged(newAngle);
 
               // Recalculate coordinates under crosshair
               final worldPt = widget.calibrationSystem
                   .screenToWorld(currentCx, currentCy, newAngle, W, H);
               widget.onCrosshairChanged(
-                  currentCx, currentCy, worldPt.dx, worldPt.dy);
+                  currentCx, currentCy, worldPt.dx, worldPt.dy, W, H);
             }
           },
           onPanEnd: (_) {
@@ -134,8 +222,8 @@ class _CalibrationCanvasState extends State<CalibrationCanvas> {
           },
           child: Stack(
             children: [
-              // 1. Background — media_kit Video or dark fallback
-              if (!widget.isSimulator && widget.videoController != null)
+              // 1. Background — media_kit Video, or an idle placeholder
+              if (widget.videoController != null)
                 SizedBox(
                   width: W,
                   height: H,
@@ -151,18 +239,28 @@ class _CalibrationCanvasState extends State<CalibrationCanvas> {
                   color: const Color(0xFF090B0D),
                   width: W,
                   height: H,
+                  alignment: Alignment.center,
+                  child: const Text(
+                    'NOT CONNECTED',
+                    style: TextStyle(
+                      color: Color(0xFF444444),
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      fontFamily: 'monospace',
+                      letterSpacing: 1.0,
+                    ),
+                  ),
                 ),
 
-              // 2. Custom Painter Overlays (Simulator rotating grid, HUD, crosshairs, centroids)
+              // 2. Custom Painter Overlays (HUD, crosshairs, centroid)
               Positioned.fill(
                 child: CustomPaint(
                   painter: CalibrationPainter(
-                    isSimulator: widget.isSimulator,
+                    isConnected: widget.videoController != null,
                     angle: widget.angle,
                     crosshairX: currentCx,
                     crosshairY: currentCy,
                     calibrationSystem: widget.calibrationSystem,
-                    simulator: widget.simulator,
                     draggingCrosshair: _draggingCrosshair,
                   ),
                 ),
@@ -176,21 +274,19 @@ class _CalibrationCanvasState extends State<CalibrationCanvas> {
 }
 
 class CalibrationPainter extends CustomPainter {
-  final bool isSimulator;
+  final bool isConnected;
   final double angle;
   final double crosshairX;
   final double crosshairY;
   final CalibrationSystem calibrationSystem;
-  final RotatingFloorSimulator simulator;
   final bool draggingCrosshair;
 
   CalibrationPainter({
-    required this.isSimulator,
+    required this.isConnected,
     required this.angle,
     required this.crosshairX,
     required this.crosshairY,
     required this.calibrationSystem,
-    required this.simulator,
     required this.draggingCrosshair,
   });
 
@@ -201,80 +297,14 @@ class CalibrationPainter extends CustomPainter {
     final double cx = W / 2.0;
     final double cy = H / 2.0;
 
-    final paint = Paint()..isAntiAlias = true;
-
-    // --- 1. RENDER SIMULATOR FLOOR GRID AND FEATURES ---
-    if (isSimulator) {
-      final double theta = angle * math.pi / 180.0;
-      final double cosT = math.cos(theta);
-      final double sinT = math.sin(theta);
-
-      // Rotating grid lines
-      final gridPaint = Paint()
-        ..color = const Color(0x15FFFFFF)
-        ..strokeWidth = 1.0
-        ..style = PaintingStyle.stroke;
-
-      const double gridInterval = 80.0;
-      for (double g = -480; g <= 480; g += gridInterval) {
-        // Horizontal lines (constant y_w)
-        final ptStartH = simulator.worldToScreen(-640, g, cosT, sinT, cx, cy);
-        final ptEndH = simulator.worldToScreen(640, g, cosT, sinT, cx, cy);
-        canvas.drawLine(ptStartH, ptEndH, gridPaint);
-
-        // Vertical lines (constant x_w)
-        final ptStartV = simulator.worldToScreen(g, -480, cosT, sinT, cx, cy);
-        final ptEndV = simulator.worldToScreen(g, 480, cosT, sinT, cx, cy);
-        canvas.drawLine(ptStartV, ptEndV, gridPaint);
-      }
-
-      // Draw true pivot marker
-      final truePivotScreen = simulator.getProjectedPivot(angle, W, H);
-      final truePivotPaint = Paint()
-        ..color = const Color(0x3500FF66)
-        ..strokeWidth = 1.0
-        ..style = PaintingStyle.stroke;
-      canvas.drawCircle(truePivotScreen, 6.0, truePivotPaint);
-
-      // Draw simulator floor features
-      final features = simulator.getProjectedFeatures(angle, W, H);
-      for (var f in features) {
-        if (!f['isOnScreen']) continue;
-        final Offset screenPos = f['position'];
-
-        // Faint orange marker
-        final featurePaint = Paint()
-          ..color = const Color(0xB0FF9900)
-          ..strokeWidth = 2.0;
-
-        canvas.drawLine(Offset(screenPos.dx - 6, screenPos.dy),
-            Offset(screenPos.dx + 6, screenPos.dy), featurePaint);
-        canvas.drawLine(Offset(screenPos.dx, screenPos.dy - 6),
-            Offset(screenPos.dx, screenPos.dy + 6), featurePaint);
-
-        // Draw feature name label
-        final textPainter = TextPainter(
-          text: TextSpan(
-            text: f['name'],
-            style: const TextStyle(
-                color: Color(0xFFCCCCCC),
-                fontSize: 9.0,
-                fontFamily: 'monospace'),
-          ),
-          textDirection: TextDirection.ltr,
-        )..layout();
-        textPainter.paint(canvas, Offset(screenPos.dx + 8, screenPos.dy - 5));
-      }
-    }
-
-    // --- 2. RENDER STATIC CENTRAL HUD GUIDELINES ---
+    // --- 1. RENDER STATIC CENTRAL HUD GUIDELINES ---
     final hudPaint = Paint()
       ..color = const Color(0x10FFFFFF)
       ..strokeWidth = 1.0;
     canvas.drawLine(Offset(0, cy), Offset(W, cy), hudPaint);
     canvas.drawLine(Offset(cx, 0), Offset(cx, H), hudPaint);
 
-    // --- 3. RENDER LOGGED CALIBRATION READINGS (Cyan dots) ---
+    // --- 2. RENDER LOGGED CALIBRATION READINGS (Cyan dots) ---
     for (int i = 0; i < calibrationSystem.readings.length; i++) {
       final reading = calibrationSystem.readings[i];
       final rxry = calibrationSystem.worldToScreen(
@@ -301,7 +331,7 @@ class CalibrationPainter extends CustomPainter {
       textPainter.paint(canvas, Offset(rxry.dx + 6, rxry.dy - 12));
     }
 
-    // --- 4. RENDER CALIBRATED PIVOT CENTROID OVERLAY (Green target) ---
+    // --- 3. RENDER CALIBRATED PIVOT CENTROID (thin plus-sign, no label) ---
     if (calibrationSystem.centroid != null) {
       final centroidWorld = calibrationSystem.centroid!;
       final centroidScreen = calibrationSystem.worldToScreen(
@@ -309,99 +339,81 @@ class CalibrationPainter extends CustomPainter {
 
       final greenPaint = Paint()
         ..color = const Color(0xFF00FF66)
-        ..strokeWidth = 2.0
+        ..strokeWidth = 1.0
         ..style = PaintingStyle.stroke;
 
-      canvas.drawCircle(centroidScreen, 15.0, greenPaint);
-      canvas.drawCircle(
-          centroidScreen,
-          2.0,
-          Paint()
-            ..color = const Color(0xFF00FF66)
-            ..style = PaintingStyle.fill);
+      const double armLen = 14.0;
+      canvas.drawLine(
+          Offset(centroidScreen.dx - armLen, centroidScreen.dy),
+          Offset(centroidScreen.dx + armLen, centroidScreen.dy),
+          greenPaint);
+      canvas.drawLine(
+          Offset(centroidScreen.dx, centroidScreen.dy - armLen),
+          Offset(centroidScreen.dx, centroidScreen.dy + armLen),
+          greenPaint);
+    }
 
-      // Outer targeting tick lines
-      canvas.drawLine(Offset(centroidScreen.dx - 22, centroidScreen.dy),
-          Offset(centroidScreen.dx - 10, centroidScreen.dy), greenPaint);
-      canvas.drawLine(Offset(centroidScreen.dx + 10, centroidScreen.dy),
-          Offset(centroidScreen.dx + 22, centroidScreen.dy), greenPaint);
-      canvas.drawLine(Offset(centroidScreen.dx, centroidScreen.dy - 22),
-          Offset(centroidScreen.dx, centroidScreen.dy - 10), greenPaint);
-      canvas.drawLine(Offset(centroidScreen.dx, centroidScreen.dy + 10),
-          Offset(centroidScreen.dx, centroidScreen.dy + 22), greenPaint);
+    // --- 4. RENDER ACTIVE TARGETING RETICLE (Draggable crosshair) ---
+    // Hidden once a centroid has been resolved — only the plus-sign
+    // marker above should remain on screen at that point.
+    if (calibrationSystem.centroid == null) {
+      final Color boxColor = draggingCrosshair
+          ? const Color(0xFF00FF66)
+          : const Color(0xFFFFCC00);
+      final boxPaint = Paint()
+        ..color = boxColor
+        ..strokeWidth = draggingCrosshair ? 2.0 : 1.5
+        ..style = PaintingStyle.stroke;
 
-      // Text label details
+      const double boxSize = 40.0;
+      canvas.drawRect(
+        Rect.fromCenter(
+            center: Offset(crosshairX, crosshairY),
+            width: boxSize,
+            height: boxSize),
+        boxPaint,
+      );
+
+      // Inner red crosshairs
+      final redPaint = Paint()
+        ..color = const Color(0xFFFF3B30)
+        ..strokeWidth = 2.0;
+      const double chLen = 12.0;
+      canvas.drawLine(Offset(crosshairX - chLen, crosshairY),
+          Offset(crosshairX + chLen, crosshairY), redPaint);
+      canvas.drawLine(Offset(crosshairX, crosshairY - chLen),
+          Offset(crosshairX, crosshairY + chLen), redPaint);
+
+      // Render coordinates beside reticle
+      final worldPt =
+          calibrationSystem.screenToWorld(crosshairX, crosshairY, angle, W, H);
       final textPainter = TextPainter(
         text: TextSpan(
           text:
-              "CALIB_ZERO (${centroidWorld.dx.toStringAsFixed(1)}, ${centroidWorld.dy.toStringAsFixed(1)})",
-          style: const TextStyle(
-              color: Color(0xFF00FF66),
-              fontSize: 9.0,
-              fontWeight: FontWeight.bold,
-              fontFamily: 'monospace'),
+              "Scr: (${crosshairX.toInt()}, ${crosshairY.toInt()})\nWorld: (${worldPt.dx.toStringAsFixed(1)}, ${worldPt.dy.toStringAsFixed(1)})",
+          style: TextStyle(
+            color: draggingCrosshair
+                ? const Color(0xFF00FFFF)
+                : const Color(0xFFCCCCCC),
+            fontSize: 9.0,
+            fontFamily: 'monospace',
+          ),
         ),
         textDirection: TextDirection.ltr,
       )..layout();
-      textPainter.paint(
-          canvas, Offset(centroidScreen.dx + 18, centroidScreen.dy - 12));
+      textPainter.paint(canvas, Offset(crosshairX + 25, crosshairY - 10));
     }
 
-    // --- 5. RENDER ACTIVE TARGETING RETICLE (Draggable crosshair) ---
-    final Color boxColor =
-        draggingCrosshair ? const Color(0xFF00FF66) : const Color(0xFFFFCC00);
-    final boxPaint = Paint()
-      ..color = boxColor
-      ..strokeWidth = draggingCrosshair ? 2.0 : 1.5
-      ..style = PaintingStyle.stroke;
-
-    const double boxSize = 40.0;
-    canvas.drawRect(
-      Rect.fromCenter(
-          center: Offset(crosshairX, crosshairY),
-          width: boxSize,
-          height: boxSize),
-      boxPaint,
-    );
-
-    // Inner red crosshairs
-    final redPaint = Paint()
-      ..color = const Color(0xFFFF3B30)
-      ..strokeWidth = 2.0;
-    const double chLen = 12.0;
-    canvas.drawLine(Offset(crosshairX - chLen, crosshairY),
-        Offset(crosshairX + chLen, crosshairY), redPaint);
-    canvas.drawLine(Offset(crosshairX, crosshairY - chLen),
-        Offset(crosshairX, crosshairY + chLen), redPaint);
-
-    // Render coordinates beside reticle
-    final worldPt =
-        calibrationSystem.screenToWorld(crosshairX, crosshairY, angle, W, H);
-    final textPainter = TextPainter(
-      text: TextSpan(
-        text:
-            "Scr: (${crosshairX.toInt()}, ${crosshairY.toInt()})\nWorld: (${worldPt.dx.toStringAsFixed(1)}, ${worldPt.dy.toStringAsFixed(1)})",
-        style: TextStyle(
-          color: draggingCrosshair
-              ? const Color(0xFF00FFFF)
-              : const Color(0xFFCCCCCC),
-          fontSize: 9.0,
-          fontFamily: 'monospace',
-        ),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    textPainter.paint(canvas, Offset(crosshairX + 25, crosshairY - 10));
-
-    // --- 6. TELEMETRY CORNER OVERLAYS ---
-    // Top-Left: REC mode label
-    final modeText =
-        isSimulator ? "● REC [SIMULATOR_MODE]" : "● REC [LIVE_RTSP_FEED]";
+    // --- 5. TELEMETRY CORNER OVERLAYS ---
+    // Top-Left: REC / connection state
+    final modeText = isConnected ? "● REC [LIVE]" : "○ NOT CONNECTED";
     final modePainter = TextPainter(
       text: TextSpan(
         text: modeText,
-        style: const TextStyle(
-            color: Color(0xFFFF3B30),
+        style: TextStyle(
+            color: isConnected
+                ? const Color(0xFFFF3B30)
+                : const Color(0xFF666666),
             fontSize: 10.0,
             fontWeight: FontWeight.bold,
             fontFamily: 'monospace'),
@@ -424,17 +436,6 @@ class CalibrationPainter extends CustomPainter {
     )..layout();
     anglePainter.paint(canvas, Offset(W - anglePainter.width - 15, 25));
 
-    // Bottom-Left: System health & state
-    final statePainter = TextPainter(
-      text: TextSpan(
-        text: "SYS: STABLE  |  READINGS: ${calibrationSystem.readings.length}",
-        style: const TextStyle(
-            color: Color(0xFF888888), fontSize: 10.0, fontFamily: 'monospace'),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    statePainter.paint(canvas, Offset(15, H - 25));
-
     // Bottom-Right: Current Time
     final now = DateTime.now();
     final timeStr =
@@ -452,7 +453,7 @@ class CalibrationPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CalibrationPainter oldDelegate) {
-    return oldDelegate.isSimulator != isSimulator ||
+    return oldDelegate.isConnected != isConnected ||
         oldDelegate.angle != angle ||
         oldDelegate.crosshairX != crosshairX ||
         oldDelegate.crosshairY != crosshairY ||

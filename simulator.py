@@ -66,9 +66,11 @@ class RotatingFloorSimulator:
             
         # Draw the true pivot indicator (just for verification, very faint, or hidden)
         pivot_screen = self.world_to_screen(self.true_pivot_x, self.true_pivot_y, cos_t, sin_t, cx, cy)
-        painter.setPen(QPen(QColor("#00FF66", 25), 1))
+        pivot_color = QColor("#00FF66")
+        pivot_color.setAlpha(25)
+        painter.setPen(QPen(pivot_color, 1))
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawCircle(pivot_screen, 4)
+        painter.drawEllipse(pivot_screen, 4, 4)
         
         # --- Draw Floor Features ---
         font = QFont("Consolas", 8)
@@ -86,7 +88,9 @@ class RotatingFloorSimulator:
                 continue
                 
             # Draw feature point marker (orange cross / dot)
-            painter.setPen(QPen(QColor("#FF9900", 180), 2))
+            feature_color = QColor("#FF9900")
+            feature_color.setAlpha(180)
+            painter.setPen(QPen(feature_color, 2))
             # Draw + shape
             painter.drawLine(screen_pos.x() - 6, screen_pos.y(), screen_pos.x() + 6, screen_pos.y())
             painter.drawLine(screen_pos.x(), screen_pos.y() - 6, screen_pos.x(), screen_pos.y() + 6)
